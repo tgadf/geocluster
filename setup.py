@@ -3,7 +3,7 @@ import setuptools
 
 setup(
   name = 'geocluster',
-  py_modules = ['geocluster', 'plots'],
+  py_modules = ['geocluster', 'plots', 'geoclusterUtils'],
   version = '0.0.1',
   description = 'A Geospatial Clustering Tool',
   long_description = open('README.md').read(),
