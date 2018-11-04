@@ -5,10 +5,7 @@ from collections import OrderedDict
 from haversine import haversine
 from pandas import DataFrame, Series
 from pandasUtils import isSeries, isDataFrame
-try:
-    import pygeohash as geohash
-except:
-    import geohash
+import geohash
     
     
 

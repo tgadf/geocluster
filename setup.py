@@ -20,7 +20,7 @@ setup(
     'Topic :: Software Development :: Libraries :: Python Modules',
     'Topic :: Utilities'
   ],
-  install_requires=['utils==0.0.1', 'haversine', 'pandas', 'numpy'],
-  dependency_links=['git+ssh://git@github.com/tgadf/utils.git#egg=utils-0.0.1']
+  install_requires=['utils==0.0.1', 'geohash==0.0.1', 'haversine', 'pandas', 'numpy'],
+  dependency_links=['git+ssh://git@github.com/tgadf/utils.git#egg=utils-0.0.1', 'git+ssh://git@github.com/tgadf/geohash.git#egg=geohash-0.0.1']
 )
  
