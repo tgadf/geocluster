@@ -1,9 +1,11 @@
-from numpy import pi, cos, sin, ceil, vstack, array
+from numpy import pi, cos, sin, ceil, vstack, array, repeat
 from numpy.random import shuffle, uniform, normal, choice
 from pandas import DataFrame
 from haversine import haversine
-
-    
+from geoUtils import convertMetersToLat, convertMetersToLong
+from collections import OrderedDict
+from random import choices
+from pandas import DataFrame
 
 
 def genCenters(n, latRange, lngRange, retList=False, debug=False):
@@ -72,40 +74,132 @@ def genClusters(n, ppc, latRange, lngRange, dist="gauss", maxrad=100, mix=True, 
         
     return retval
 
+
+def genImportantClusters(gc):
+    clusters = gc.getClusters()
+    cls   = list(clusters.keys())
+
+    impcls  = list(set(choice(array(cls), 10)))[:6]
+    homecl  = impcls[0]
+    impcls  = impcls[1:]
+    cls.remove(homecl)
+    for cl in impcls:
+        cls.remove(cl)
+    return {"Home": homecl, "Imps": impcls, "Rest": cls}
+    
+    
+def getStartEndLocation(trip, clusters, returnLoc=True):
+    # Start
+    cl  = trip[0]
+    if returnLoc is True:
+        cluster = clusters[cl]
+        rad = uniform(0, convertMetersToLat(cluster.getQuantiles()[-1]))
+        phi = uniform(0, 2*pi)
+        com = cluster.getCoM()
+        lat = com[0] + rad*cos(phi)
+        lng = com[1] + rad*sin(phi)
+        start = (lat,lng)
+    else:
+        start = cl
+
+    # End
+    cl  = trip[1]
+    if returnLoc is True:
+        cluster = clusters[cl]
+        rad = uniform(0, convertMetersToLat(cluster.getQuantiles()[-1]))
+        phi = uniform(0, 2*pi)
+        com = cluster.getCoM()
+        lat = com[0] + rad*cos(phi)
+        lng = com[1] + rad*sin(phi)
+        end = (lat,lng)
+    else:
+        end = cl    
+        
+    return [start, end]
+        
+    
+
 def genTripsBetweenClusters(n, gc, returnLoc=True, returnDF=False):
     clusters = gc.getClusters()
     cls   = list(clusters.keys())
-    trips = list(zip(choice(array(cls), size=n), choice(array(cls), size=n)))
+
+    retval = genImportantClusters(gc)
+    trips = []
+
+    cls = OrderedDict()
+    cls[retval['Home']] = 0.05
+    pval = 0.45/len(retval['Imps'])
+    for cl in retval['Imps']:
+        cls[cl] = pval
+
+    pval = (1.0 - sum(cls.values()))/len(retval['Rest'])
+    for cl in retval['Rest']:
+        cls[cl] = pval
+
+    p = list(cls.values())
+    a = list(cls.keys())
+
+    dst = choice(a=a, p=p, size=1000)
+    src = repeat(retval['Home'], 1000)
+
+    trips += list(zip(src, dst))
+
+
+    for cl in retval['Imps']:
+        cls = OrderedDict()
+        cls[retval['Home']] = 0.20
+        cls[cl] = 0.01
+        for cl2 in retval['Imps']:
+            if cl == cl2:
+                continue
+            cls[cl2] = 0.1
+
+        pval = (1.0 - sum(cls.values()))/len(retval['Rest'])
+        for cl in retval['Rest']:
+            cls[cl] = pval
+
+        p = list(cls.values())
+        a = list(cls.keys())
+
+        dst = choice(a=a, p=p, size=1000)
+        src = repeat(cl, 1000)
+
+        trips += list(zip(src, dst))
+
+
+    for cl in retval['Rest']:
+        cls = OrderedDict()
+        cls[retval['Home']] = 0.05
+        cls[cl] = 0.01
+        for cl2 in retval['Imps']:
+            cls[cl2] = 0.1
+        pval = (1.0 - sum(cls.values()))/(len(retval['Rest'])-1)
+        for cl2 in retval['Rest']:
+            if cl == cl2:
+                continue
+            cls[cl2] = pval
+
+        p = list(cls.values())
+        a = list(cls.keys())
+
+        dst = choice(a=a, p=p, size=1000)
+        src = repeat(cl, 1000)
+
+        trips += list(zip(src, dst))    
+    
+    
+    ## Randomize trips
+    shuffle(trips)
+    
+    
+    ## Select 'n' trips
+    selectedTrips = choices(trips, k=n)
+    print("Selected {0} randomized trips".format(len(selectedTrips)))
     
     genTrips = []
-    for trip in trips:
-        # Start
-        cl  = trip[0]
-        if returnLoc is True:
-            cluster = clusters[cl]
-            rad = uniform(0, convertMetersToLat(cluster.getQuantiles()[-1]))
-            phi = uniform(0, 2*pi)
-            com = cluster.getCoM()
-            lat = com[0] + rad*cos(phi)
-            lng = com[1] + rad*sin(phi)
-            start = (lat,lng)
-        else:
-            start = cl
-
-        # End
-        cl  = trip[1]
-        if returnLoc is True:
-            cluster = clusters[cl]
-            rad = uniform(0, convertMetersToLat(cluster.getQuantiles()[-1]))
-            phi = uniform(0, 2*pi)
-            com = cluster.getCoM()
-            lat = com[0] + rad*cos(phi)
-            lng = com[1] + rad*sin(phi)
-            end = (lat,lng)
-        else:
-            end = cl
-        
-        genTrips.append([start, end])
+    for trip in selectedTrips:
+        genTrips.append(getStartEndLocation(trip, clusters, returnLoc=returnLoc))
+    print("Found Start/End for the {0} randomized trips".format(len(genTrips)))
         
     if returnDF is True:
         genTrips = convertTripsToDataFrame(array(genTrips))
@@ -114,8 +208,9 @@ def genTripsBetweenClusters(n, gc, returnLoc=True, returnDF=False):
 
 
 def convertTripsToDataFrame(trips):
+    print("Converting {0} trips to a DataFrame".format(trips.shape))
     getDist = lambda x: haversine((x[0], x[1]), (x[2], x[3]))
-    df = DataFrame(trips.reshape(1000, 4))
+    df = DataFrame(trips.reshape(trips.shape[0], 4))
     df.columns = ["lat0", "long0", "lat1", "long1"]
     df['total_miles'] = list(map(getDist, df[["lat0", "long0", "lat1", "long1"]].values))
     df['duration'] = 60.0*df['total_miles']/3
