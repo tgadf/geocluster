@@ -3,6 +3,7 @@ from numpy.random import shuffle, uniform, normal, choice
 from pandas import DataFrame
 from haversine import haversine
 from geoUtils import convertMetersToLat, convertMetersToLong
+from pandasUtils import castDateTime
 from collections import OrderedDict
 from random import choices
 from pandas import DataFrame
@@ -214,4 +215,14 @@ def convertTripsToDataFrame(trips):
     df.columns = ["lat0", "long0", "lat1", "long1"]
     df['total_miles'] = list(map(getDist, df[["lat0", "long0", "lat1", "long1"]].values))
     df['duration'] = 60.0*df['total_miles']/3
+    
+    import datetime as dt
+    start = dt.datetime.now()
+        
+    df['start'] = start
+    getEnd = lambda x: x[0] + dt.timedelta(0, float(x[1]))
+    df['end'] = list(map(getEnd, df[['start', 'duration']].values))
+
+    df['start'] = castDateTime(df['start'])
+    df['end'] = castDateTime(df['end'])    
     return df
