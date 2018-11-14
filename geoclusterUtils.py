@@ -3,7 +3,7 @@ from numpy.random import shuffle, uniform, normal, choice
 from pandas import DataFrame
 from haversine import haversine
 from geoUtils import convertMetersToLat, convertMetersToLong
-from pandasUtils import castDateTime
+from pandasUtils import castDateTime, castFloat64
 from collections import OrderedDict
 from random import choices
 from pandas import DataFrame
@@ -116,7 +116,7 @@ def getStartEndLocation(trip, clusters, returnLoc=True):
     else:
         end = cl    
         
-    return [start, end]
+    return [start, end, trip]
         
     
 
@@ -202,6 +202,7 @@ def genTripsBetweenClusters(n, gc, returnLoc=True, returnDF=False):
         genTrips.append(getStartEndLocation(trip, clusters, returnLoc=returnLoc))
     print("Found Start/End for the {0} randomized trips".format(len(genTrips)))
         
+    print(genTrips[0])
     if returnDF is True:
         genTrips = convertTripsToDataFrame(array(genTrips))
         
@@ -211,8 +212,12 @@ def genTripsBetweenClusters(n, gc, returnLoc=True, returnDF=False):
 def convertTripsToDataFrame(trips):
     print("Converting {0} trips to a DataFrame".format(trips.shape))
     getDist = lambda x: haversine((x[0], x[1]), (x[2], x[3]))
-    df = DataFrame(trips.reshape(trips.shape[0], 4))
-    df.columns = ["lat0", "long0", "lat1", "long1"]
+    df = DataFrame(trips.reshape(trips.shape[0], 6))    
+    df.columns = ["lat0", "long0", "lat1", "long1", "cl0", "cl1"]
+    df["lat0"] = castFloat64(df["lat0"])
+    df["lat1"] = castFloat64(df["lat1"])
+    df["long0"] = castFloat64(df["long0"])
+    df["long1"] = castFloat64(df["long1"])
     df['total_miles'] = list(map(getDist, df[["lat0", "long0", "lat1", "long1"]].values))
     df['duration'] = 60.0*df['total_miles']/3
     
