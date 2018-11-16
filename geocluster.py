@@ -6,6 +6,7 @@ from haversine import haversine
 from pandas import DataFrame, Series
 from pandasUtils import isSeries, isDataFrame
 import geohash
+from convertData import convertData
     
     
 
@@ -28,8 +29,12 @@ class geoClusters():
         self.distMax       = distMax
         
         self.summary = {}
-        
-        self.convertPoints(points, debug)    
+
+        ## Convert Data
+        cd = convertData()
+        cd.setData(points)
+        self.points = cd.getArray()
+        #self.convertPoints(points, debug)    
         self.findGeos(debug)
         self.findGeoCounts(debug)
             
