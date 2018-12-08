@@ -30,6 +30,14 @@ class geoClusters():
         
         self.summary = {}
 
+        if points is not None:
+            self.setInputs(points=points, debug=debug)
+        else:
+            if debug:
+                print("Creating empty geo cluster object!")
+
+                
+    def setInputs(self, points=None, debug=False):
         ## Convert Data
         cd = convertData()
         cd.setData(points)
@@ -62,6 +70,9 @@ class geoClusters():
 
     def getClusters(self):
         return self.clusters
+    
+    def setClusters(self, clusters):
+        self.clusters = clusters
 
     def getClusterByIndex(self, idx, debug=False):
         name    = "{0}{1}".format(self.clusterPrefix, idx)
@@ -372,7 +383,7 @@ class geoClusters():
                 print("Created cluster with seed {0} and {1} cells".format(geo, len(cluster.getCells())))
                 print("There are {0} remaining cells".format(geoCounts.count()))
 
-        self.clusters = clusters
+        self.setClusters(clusters)
         
         self.summary['Clusters']  = len(clusters)
         self.summary['Cells']     = totalGeos
@@ -523,6 +534,9 @@ class geoCluster():
         
     def getCells(self):
         return self.cells
+        
+    def setCells(self, cells):
+        self.cells = cells
     
     def getNCells(self):
         return len(self.cells)
