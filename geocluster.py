@@ -1,12 +1,15 @@
 # coding: utf-8
 
 from timeUtils import clock, elapsed
-from collections import OrderedDict
+from collections import OrderedDict, Counter
 from haversine import haversine
 from pandas import DataFrame, Series
 from pandasUtils import isSeries, isDataFrame
+from geoUtils import getDist, applyGeo8
 import geohash
 from convertData import convertData
+from numpy import ndarray, stack, vectorize
+
     
     
 
@@ -14,13 +17,23 @@ from convertData import convertData
 # Geo Clusters Class
 ##############################################################################################################################
 class geoClusters():
-    def __init__(self, key, points = None, geoCnts = None, distMax = 150, debug=False):
+    def __init__(self, key, points = None, geoCnts = None, distMax = 150, mergeFactor = 2.0, debug=False):
         self.device = key
         self.points = None
         self.bitlen = None
         
-        self.geoDataFrame  = None
-        self.geoCntsSeries = None
+        self.cellsDataFrame  = None
+        self.cells = None
+        
+        self.mergeFactor = mergeFactor
+        
+        self.protoCells = None
+        self.perimCells = None
+        
+        self.protoClusters    = None
+        self.seedlessClusters = None
+        self.mergedClusters   = None
+        self.protoclusterCoMs = None
         
         self.clusters    = None
         self.clusterCoMs = None
@@ -37,42 +50,116 @@ class geoClusters():
                 print("Creating empty geo cluster object!")
 
                 
-    def setInputs(self, points=None, debug=False):
+    def setInputs(self, points, debug=False):        
         ## Convert Data
         cd = convertData()
         cd.setData(points)
         self.points = cd.getArray()
-        #self.convertPoints(points, debug)    
-        self.findGeos(debug)
-        self.findGeoCounts(debug)
+        #self.createCells(debug=debug)
             
         
     #########################################################################################################
     # Getter/Setter Functions
     #########################################################################################################
-    def setGeoDataFrame(self, geoDataFrame):
-        self.geoDataFrame = geoDataFrame
-    
-    def getGeoDataFrame(self):
-        return self.geoDataFrame
-    
-    def setGeoCntsSeries(self, geoCntsSeries):
-        self.geoCntsSeries = geoCntsSeries
-    
-    def getGeoCntsSeries(self):
-        return self.geoCntsSeries
-
     def setMaxDistance(self, dist):
         self.distMax = dist
 
     def getMaxDistance(self):
         return self.distMax
 
+    ######################################
+    # Cells
+    ######################################
+    def setCellsDataFrame(self, cellsDataFrame, debug=False):
+        if debug:
+            print("  Setting Cells DataFrame (Raw Data) with {0} Inputs".format(cellsDataFrame.shape[0]))
+        self.cellsDataFrame = cellsDataFrame
+
+    def getCellsDataFrame(self):
+        return self.cellsDataFrame
+    
+    def setCells(self, cells, debug=False):
+        if debug:
+            print("  Setting {0} Cells Data".format(cells.shape[0]))
+        self.cells = cells
+
+    def getCells(self):
+        return self.cells
+    
+    def setPerimCells(self, cells, debug=False):
+        if debug:
+            print("  Setting {0} PerimCells Data".format(cells.shape[0]))
+        self.perimCells = cells
+
+    def getPerimCells(self):
+        return self.perimCells
+    
+    def setSeedlessCells(self, cells, debug=False):
+        if debug:
+            print("  Setting {0} SeedlessCells Data".format(cells.shape[0]))
+        self.seedlessCells = cells
+
+    def getSeedlessCells(self):
+        return self.seedlessCells
+    
+    def setProtoCells(self, cells, debug=False):
+        if debug:
+            print("  Setting {0} ProtoCells Data".format(cells.shape[0]))
+        self.protoCells = cells
+
+    def getProtoCells(self):
+        return self.protoCells
+
+    
+    ######################################
+    # Proto Clusters
+    ######################################
+    def setProtoClusters(self, protoClusters, debug=False):
+        if debug:
+            print("  Setting {0} ProtoCluster Data".format(len(protoClusters)))
+        self.protoClusters = protoClusters
+
+    def getProtoClusters(self):
+        return self.protoClusters
+
+    
+    ######################################
+    # Seedless Clusters
+    ######################################
+    def setSeedlessClusters(self, seedlessClusters, debug=False):
+        if debug:
+            print("  Setting {0} SeedlessCluster Data".format(len(seedlessClusters)))
+        self.seedlessClusters = seedlessClusters
+
+    def getSeedlessClusters(self):
+        return self.seedlessClusters
+
+    
+    ######################################
+    # Merged Clusters
+    ######################################
+    def setMergedClusters(self, mergedClusters, debug=False):
+        if debug:
+            print("  Setting {0} MergedCluster Data".format(len(mergedClusters)))
+        self.mergedClusters = mergedClusters
+
+    def getMergedClusters(self):
+        return self.mergedClusters
+    
+    
+    ######################################
+    # Clusters
+    ######################################
+    def setClusters(self, clusters, debug=False):
+        if debug:
+            print("Setting Clusters Data")
+        self.clusters = clusters
+
     def getClusters(self):
         return self.clusters
-    
-    def setClusters(self, clusters):
-        self.clusters = clusters
+
+    def getNClusters(self):
+        return len(self.clusters)
 
     def getClusterByIndex(self, idx, debug=False):
         name    = "{0}{1}".format(self.clusterPrefix, idx)
@@ -97,15 +184,6 @@ class geoClusters():
             if debug:
                 print("Could not find cluster {0} in list of [{1}] available clusters".format(name, list(self.clusters.keys())))
         return cluster
-    
-    def getNClusters(self):
-        return self.summary.get('Clusters')
-    
-    def getNCells(self):
-        return self.summary.get('Cells')
-    
-    def getNCounts(self):
-        return self.summary.get('Counts')
 
     def getClusterRadius(self, name, debug=False):
         cluster = self.clusters.get(name)
@@ -177,9 +255,6 @@ class geoClusters():
         if debug:
             start, cmt = clock("Converting {0} Points To Correct Format".format(len(points)))
             
-        from numpy import ndarray, stack
-        from pandas.core.series import Series
-        from pandas.core.frame import DataFrame
         if isinstance(points, ndarray):
             self.points = points
         elif isinstance(points, DataFrame):
@@ -199,7 +274,6 @@ class geoClusters():
                 raise ValueError("Data is not a numpy array!")
 
             self.points = stack((x,y), axis=-1)
-        self.convertToMeters()
         
         if debug:
             print("Data has correct format with a {0} shape.".format(self.points.shape))
@@ -222,106 +296,353 @@ class geoClusters():
                                                         cluster.getRadius(), cluster.getCoM(), cluster.getNCells()))
                 
     
-    #########################################################################################################
-    # Geohash and Geohash Counts Finders
-    #########################################################################################################
-    def findGeos(self, debug=False):      
-        def f(x):
-            prec=8
-            try:
-                lat = x[0]
-                long = x[1]
-                retval = geohash.encode(lat, long, precision=prec)
-            except:
-                retval = 'xxxxxxxx'
-            return retval 
-        
+    #########################################################################################################################################################
+    #
+    # Create Cluster Cells
+    #
+    ######################################################################################################################################################### 
+    def createCells(self, debug=False):      
         if debug:
             start, cmt = clock("Finding Geohash (BitLen=8) Values from {0} Points".format(len(self.points)))
-
-        from pandas.core.frame import DataFrame
-        from numpy import vectorize
-        geoDataFrame = DataFrame(self.points, columns=['lat', 'long'])
-        geoDataFrame['geo'] = geoDataFrame[['lat', 'long']].apply(f, axis=1).values
-        self.setGeoDataFrame(geoDataFrame)
+        
+        cellDataFrame = DataFrame(self.points, columns=['lat', 'long'])
+        cellDataFrame['geo'] = applyGeo8(cellDataFrame)
+        self.setCellsDataFrame(cellDataFrame, debug=debug)
+        cells = Series(Counter(dict(cellDataFrame['geo'].value_counts())))
+        cells.sort_values(ascending=False, inplace=True)
+        self.setCells(cells, debug=debug)
         
         if debug:
             elapsed(start, cmt)
         
+    
+    
+    #########################################################################################################################################################
+    #
+    # Create Proto Clusters
+    #
+    #########################################################################################################################################################
+    def createProtoClusters(self, seedMin=10, debug=False):
+        if debug:
+            start, cmt = clock("Creating ProtoClusters with at least {0} counts".format(seedMin))
+        
+        cells = self.getCells().copy()
+        protoCells = {}
+        verydebug=False
+        
+        protos  = {}
+        nProtos = -1
+        while len(protos) != nProtos:
 
-    def findGeoCounts(self, debug=False):
-        if not isDataFrame(self.geoDataFrame):
-            raise ValueError("Must call findGeos with points before trying to count geohashs!")
+            ## Take top cell as seed            
+            seed    = cells.index[0]
+            cnt     = cells[seed]
+            if cnt < seedMin:
+                break
+            
+            protoname = "p{0}".format(len(protos))
+            protos[protoname] = {"Seed": [seed,cnt], "Counts": cnt, "CoM": None, "Radius": 0, "Cells": []}
+            protoCells[seed] = protoname
+            for geo in geohash.neighbors(seed):
+                try:
+                    geocnts = cells[geo]
+                except:
+                    geocnts = None
+                
+                if geocnts is not None:
+                    dist = getDist(seed, geo, units='m')
+                    protos[protoname]["Radius"] = max(dist, protos[protoname]["Radius"])
+                    protos[protoname]["Cells"].append([geo, geocnts])
+                    protos[protoname]["Counts"] += geocnts
+                    protoCells[geo] = protoname
+                    
+                for gh2 in geohash.neighbors(geo):
+                    if protoCells.get(gh2) is not None:
+                        continue
+                    try:
+                        geocnts2 = cells[gh2]
+                    except:
+                        geocnts2 = None
+
+                    if geocnts2 is not None:
+                        dist = getDist(seed, gh2, units='m')
+                        protos[protoname]["Radius"] = max(dist, protos[protoname]["Radius"])
+                        protos[protoname]["Cells"].append([gh2, geocnts2])
+                        protos[protoname]["Counts"] += geocnts2
+                        protoCells[gh2] = protoname
+                    
+                
+                
+            pcells = protos[protoname]["Cells"]+[protos[protoname]["Seed"]]
+            coms = [geohash.decode_exactly(x[0])[:2] for x in pcells]
+            com  = tuple([Series(x[0] for x in coms).mean(), Series(x[1] for x in coms).mean()])
+            rad   = max([getDist(com,x) for x in coms])
+            protos[protoname]["CoM"]    = com
+            protos[protoname]["Radius"] = rad
+            
+            if verydebug:
+                print("  Found ProtoCluster at {0}\tRadius {1}\t{2} Counts\t{3} Cells".format([round(x,4) for x in com], 
+                                                                                                      round(protos[protoname]["Radius"],1),
+                                                                                                      protos[protoname]["Counts"], 
+                                                                                                      len(protos[protoname]["Cells"])))
+            
+            dropCells = [protos[protoname]["Seed"][0]] + [x[0] for x in protos[protoname]["Cells"]]
+            cells = cells.drop(labels=dropCells)
+
+                        
+        self.setProtoCells(protoCells)
+        self.setPerimCells(cells)
+        self.setProtoClusters(protos)
+            
+        if debug:
+            print("Found {0} proto clusters".format(len(protos)))
+            print("  There are {0} remaining perimeter cells".format(self.perimCells.shape[0]))
+        
+    
+    
+    #########################################################################################################################################################
+    #
+    # Create Proto Clusters
+    #
+    #########################################################################################################################################################
+    def createSeedlessClusters(self, seedMin=2, debug=False):
+        if debug:
+            start, cmt = clock("Creating SeedlessClusters with at least {0} counts".format(seedMin))
+        
+        cells = self.getPerimCells()
+        seedlessCells = {}
+        verydebug=False
+        
+        seedless  = {}
+        nSeedless = -1
+        
+        while len(seedless) != nSeedless:
+
+            ## Take top cell as seed
+            geo = cells.index[0]
+            cnt = cells[geo]
+            if cnt < seedMin:
+                break
+        
+            name = "s{0}".format(len(seedless))
+            seedless[name] = {"Counts": cnt, "CoM": None, "Radius": 0, "Cells": []}
+            seedless[name]["Cells"].append([geo,cnt])
+            seedlessCells[geo] = name
+            for gh in geohash.neighbors(geo):
+                if seedlessCells.get(gh) is not None:
+                    continue
+                try:
+                    geocnts = cells[gh]
+                except:
+                    geocnts = None
+                
+                if geocnts is not None:
+                    dist = getDist(gh, geo, units='m')
+                    seedless[name]["Radius"] = max(dist, seedless[name]["Radius"])
+                    seedless[name]["Cells"].append([gh, geocnts])
+                    seedless[name]["Counts"] += geocnts
+                    seedlessCells[gh] = name
+                    
+                for gh2 in geohash.neighbors(gh):
+                    if seedlessCells.get(gh2) is not None:
+                        continue
+                    try:
+                        geocnts2 = cells[gh2]
+                    except:
+                        geocnts2 = None
+
+                    if geocnts2 is not None:
+                        dist = getDist(gh2, geo, units='m')
+                        seedless[name]["Radius"] = max(dist, seedless[name]["Radius"])
+                        seedless[name]["Cells"].append([gh2, geocnts2])
+                        seedless[name]["Counts"] += geocnts2
+                        seedlessCells[gh2] = name
+
+            scells = seedless[name]["Cells"]
+            coms = [geohash.decode_exactly(x[0])[:2] for x in scells]
+            com  = tuple([Series(x[0] for x in coms).mean(), Series(x[1] for x in coms).mean()])
+            rad   = max([getDist(com,x) for x in coms])
+            seedless[name]["CoM"] = com
+            seedless[name]["Radius"] = rad
+                
+            if verydebug:
+                print("  Found SeedlessCluster at {0}\tRadius {1}\t{2} Counts\t{3} Cells".format([round(x,4) for x in com], 
+                                                                                                      round(seedless[name]["Radius"],1),
+                                                                                                      seedless[name]["Counts"], 
+                                                                                                      len(seedless[name]["Cells"])))
+            
+            dropCells = [x[0] for x in seedless[name]["Cells"]]
+            cells = cells.drop(labels=dropCells)
+            
+        self.setSeedlessCells(seedlessCells)
+        self.setPerimCells(cells)
+        self.setSeedlessClusters(seedless)
+        
+        if debug:
+            print("Found {0} seedless clusters".format(len(seedless)))
+            print("  There are {0} remaining perimeter cells".format(self.perimCells.shape[0]))
+    
+    
+    #########################################################################################################################################################
+    #
+    # Split/Merge Clusters
+    #
+    #########################################################################################################################################################
+    def mergeClusters(self, debug=False):
+        if debug:
+            start, cmt = clock("Merge ProtoClusters and SeedlessClusters")
+            
+        from copy import deepcopy
+        protoClusters = deepcopy(self.getProtoClusters())
+        seedlessClusters = deepcopy(self.getSeedlessClusters())
+        mergedClusters = {}
+        dropClusters = {}
+        verydebug=False
+
+        for pcl in list(protoClusters.keys()):
+            if dropClusters.get(pcl) is not None:
+                continue
+            protoCluster = protoClusters[pcl]
+            pCoM = tuple(protoCluster["CoM"])
+            pRad = protoCluster["Radius"]
+            dropClusters[pcl] = 1
+
+            protoMerges = []
+            for pcl2,protoCluster2 in protoClusters.items():
+                if dropClusters.get(pcl2) is not None:
+                    continue
+                pCoM2 = tuple(protoCluster2["CoM"])
+                pRad2 = protoCluster2["Radius"]
+                dist  = getDist(pCoM,pCoM2)
+                if dist < self.mergeFactor*max([pRad,pRad2]):
+                    #print(dist,'\t',pCoM,pRad,'\t',pCoM2,pRad2)
+                    protoMerges.append(pcl2)
+                    dropClusters[pcl2] = 1
+                    if verydebug:
+                        print("  Merging {0} into {1}".format(pcl2,pcl))
+
+            seedlessMerges = []
+            for scl,seedlessCluster in seedlessClusters.items():
+                if dropClusters.get(scl) is not None:
+                    continue
+                sCoM = tuple(seedlessCluster["CoM"])
+                sRad = seedlessCluster["Radius"]
+                dist  = getDist(pCoM,sCoM)
+                if dist < self.mergeFactor*max([pRad,sRad]):
+                    #print(dist,'\t',pCoM,pRad,'\t',sCoM,sRad)
+                    seedlessMerges.append(scl)
+                    dropClusters[scl] = 1
+                    if verydebug:
+                        print("  Merging {0} into {1}".format(scl,pcl))
+
+            ## Merge everything
+            cells = protoCluster["Cells"] + [protoCluster["Seed"]]
+            for pcl2 in protoMerges:
+                cells += protoClusters[pcl2]["Cells"] + [protoClusters[pcl2]["Seed"]]
+            for scl in seedlessMerges:
+                cells += seedlessClusters[scl]["Cells"]
+                
+            coms  = [geohash.decode_exactly(x[0])[:2] for x in cells]
+            com   = tuple([Series(x[0] for x in coms).mean(), Series(x[1] for x in coms).mean()])
+            cnt   = sum([x[1] for x in cells])
+            rad   = max([getDist(com,x) for x in coms])
+            mname = "cl{0}".format(len(mergedClusters))
+            mergedClusters[mname] = {"Counts": cnt, "CoM": com, "Radius": rad, "Cells": cells}
+
+            if debug:
+                print("  Found MergedClusters {0} at {1}\tRadius {2}\t{3} Counts\t{4} Cells".format(mname,[round(x,4) for x in com], 
+                                                                                                      round(mergedClusters[mname]["Radius"],1),
+                                                                                                      mergedClusters[mname]["Counts"], 
+                                                                                                      len(mergedClusters[mname]["Cells"])))
+                
+        for name in dropClusters.keys():
+            if name.startswith("s"):
+                del seedlessClusters[name]
+            if name.startswith("p"):
+                del protoClusters[name]
+                        
+
+        dropClusters = {}
+        for scl in list(seedlessClusters.keys()):
+            if dropClusters.get(scl) is not None:
+                continue
+            seedlessCluster = seedlessClusters[scl]
+            sCoM = tuple(seedlessCluster["CoM"])
+            sRad = seedlessCluster["Radius"]
+            dropClusters[scl] = 1
+
+            seedlessMerges = []
+            for scl2,seedlessCluster2 in seedlessClusters.items():
+                if dropClusters.get(scl2) is not None:
+                    continue
+                sCoM2 = tuple(seedlessCluster2["CoM"])
+                sRad2 = seedlessCluster2["Radius"]
+                dist  = getDist(sCoM,sCoM2)
+                if dist < self.mergeFactor*max([sRad,sRad2]):
+                    #print(dist,'\t',sCoM,sRad,'\t',sCoM2,sRad2)
+                    seedlessMerges.append(scl2)
+                    dropClusters[scl2] = 1
+                    if verydebug:
+                        print("  Merging {0} into {1}".format(scl2,scl))
+
+            ## Merge everything
+            cells = seedlessCluster["Cells"]
+            for scl2 in seedlessMerges:
+                cells += seedlessClusters[scl2]["Cells"]
+                
+            coms  = [geohash.decode_exactly(x[0])[:2] for x in cells]
+            com   = tuple([Series(x[0] for x in coms).mean(), Series(x[1] for x in coms).mean()])
+            cnt   = sum([x[1] for x in cells])
+            rad   = max([getDist(com,x) for x in coms])
+            mname = "cl{0}".format(len(mergedClusters))
+            mergedClusters[mname] = {"Counts": cnt, "CoM": com, "Radius": rad, "Cells": cells}
+
+            if debug:
+                print("  Found MergedClusters {0} at {1}\tRadius {2}\t{3} Counts\t{4} Cells".format(mname,[round(x,4) for x in com], 
+                                                                                                      round(mergedClusters[mname]["Radius"],1),
+                                                                                                      mergedClusters[mname]["Counts"], 
+                                                                                                      len(mergedClusters[mname]["Cells"])))
+        for name in dropClusters.keys():
+            if name.startswith("s"):
+                del seedlessClusters[name]
+            if name.startswith("p"):
+                del protoClusters[name]
+            
+            
+        self.setMergedClusters(mergedClusters)
+        
+        
+        ## Set the final clusters        
+        clusters = {}
+        for cl,mergedCluster in mergedClusters.items():
+            mcl   = geoCluster(clnum=len(clusters), clusterPrefix="cl")
+            cells = mergedCluster["Cells"]
+            cells = dict(zip([t[0] for t in cells], [t[1] for t in cells]))
+            mcl.setCells(cells)
+            mcl.analyze()
+            name = mcl.getName()
+            clusters[name] = mcl
+            
+            
+        self.setClusters(clusters)
+  
+        if debug:
+            print("Found {0} merged clusters".format(len(mergedClusters)))
+            print("  There are {0} remaining proto clusters".format(len(protoClusters)))
+            print("  There are {0} remaining seedless clusters".format(len(seedlessClusters)))
+            print("Created {0} final clusters".format(len(clusters)))
                 
         if debug:
-            start, cmt = clock("Finding Geohash (BitLen=8) Frequency Values from Geohash DataFrame")
-            
-        from collections import Counter
-        from pandas.core.series import Series
-        
-        s = self.getGeoDataFrame()['geo']
-        geoCntsSeries = Series(Counter(dict(s.value_counts())))
-        geoCntsSeries.sort_values(ascending=False, inplace=True)
-        self.setGeoCntsSeries(geoCntsSeries)
-        
-        if debug:
             elapsed(start, cmt)
-            
-        
-    def convertToMeters(self):
-        from numpy import stack
-        try:
-            longMeters = 111319.9*(self.points[:,1] - min(self.points[:,1]))
-            latMeters  = 111319.9*(self.points[:,0] - min(self.points[:,0]))
-            self.meters = stack((latMeters, longMeters), axis=-1)
-
-            maxDist = max([max(longMeters), max(latMeters)])
-            if maxDist > 5000:
-                self.bitlen=5
-            elif maxDist > 1000:
-                self.bitlen=6
-            elif maxDist > 100:
-                self.bitlen=7
-            else:
-                self.bitlen=8
-        except:
-            self.bitlen = 5
-            self.meters = None
-            
-            
-    def getDist(self, gcode1, gcode2, units='m'):
-        from haversine import haversine
-        if all((isinstance(x, str) for x in [gcode1, gcode2])):
-            try:
-                pnt1 = geohash.decode_exactly(gcode1)[:2]
-                pnt2 = geohash.decode_exactly(gcode2)[:2]
-                dist = haversine(pnt1, pnt2)
-            except:
-                dist = None
-        elif all((isinstance(x, tuple) for x in [gcode1, gcode2])):
-            try:
-                dist = haversine(gcode1, gcode2)
-            except:
-                dist = None
-        else:
-            raise ValueError("Did not understand types {0} and {1} for getDist() inputs in geoClustering.py".format(type(gcode1), type(gcode2)))
-            
-        if units == 'm':
-            try:
-                dist = 1000*dist
-            except:
-                dist = None
-        return dist
-        
     
     
-    #########################################################################################################
+    #########################################################################################################################################################
     #
     # Find Geo Clusters
     #
-    #########################################################################################################
+    #########################################################################################################################################################
     def findClusters(self, seedMin=2, addMin=2, debug=False):
-        from collections import OrderedDict
+        raise ValueError("Don't call this anymore!")
         if debug:
             start, cmt = clock("Finding Clusters with at least {0} counts".format(seedMin))
             
@@ -339,7 +660,7 @@ class geoClusters():
 
         ## Loop over geo counts (geo, geoCnt)
         if verydebug:
-            print("There are {0} remaining cells".format(geoCounts.count()))
+            print("There are {0} remaining cells".format(geoCounts.count(axis=0)))
         clCount = -1
         while len(clusters) - clCount > 0 and geoCounts.count() > 0:
             clCount = len(clusters)
@@ -463,18 +784,13 @@ class geoClusters():
 # Geo Cluster Class
 ##############################################################################################################################
 class geoCluster():
-    def __init__(self, seed, cnts, clnum, clusterPrefix, debug=False):
-        self.seed     = seed
-        self.seedCnts = cnts
+    def __init__(self, clnum, clusterPrefix, debug=False):
         self.clnum    = clnum
         self.clusterPrefix = clusterPrefix
         self.name     = "{0}{1}".format(clusterPrefix, clnum)
         
         ## Initialize list of cells
         self.cells    = OrderedDict()
-
-        ## Add the seed cell to the list of seeds
-        self.addCell(seed, cnts)
         
         self.clDataFrame = None
         self.quantiles   = None
@@ -559,42 +875,20 @@ class geoCluster():
         print("")
         
         
-        
-    #########################################################################################################
-    # Helper
-    #########################################################################################################            
-    def getDist(self, gcode1, gcode2, units='m'):
-        from haversine import haversine
-        if all((isinstance(x, str) for x in [gcode1, gcode2])):
-            try:
-                pnt1 = geohash.decode_exactly(gcode1)[:2]
-                pnt2 = geohash.decode_exactly(gcode2)[:2]
-                dist = haversine(pnt1, pnt2)
-            except:
-                dist = None
-        elif all((isinstance(x, tuple) for x in [gcode1, gcode2])):
-            try:
-                dist = haversine(gcode1, gcode2)
-            except:
-                dist = None
-        else:
-            raise ValueError("Did not understand types {0} and {1} for getDist() inputs in geoClustering.py".format(type(gcode1), type(gcode2)))
-            
-        if units == 'm':
-            try:
-                dist = 1000*dist
-            except:
-                dist = None
-        return dist
-        
-        
     
     #########################################################################################################
     # Compute Features
     #########################################################################################################
-    def findCoM(self, debug=False):
+    def analyze(self, debug=False):
+            
+        if self.cells is None:
+            raise ValueError("Cells are None in geoCluster()!")
+
+        if len(self.cells) == 0:
+            raise ValueError("Cells are Empty in geoCluster()!")
+            
         if debug:
-            print("\tComputing Center of Mass and Radius for {0} cells".format(len(self.cells)))
+            print("\tComputing Center of Mass, Radius, and Quantiles for {0} cells".format(len(self.cells)))
 
         lats  = []
         lngs  = []
@@ -622,13 +916,13 @@ class geoCluster():
         dists = []
         for geo,cnts in self.cells.items():
             geoPnt = geohash.decode_exactly(geo)[:2]
-            dist   = self.getDist(com, geoPnt, units='m')
+            dist   = getDist(com, geoPnt, units='m')
             dists.append(dist)
             
         clDataFrame = DataFrame(list(zip(geos, lats, lngs, dists)), columns=['geo', 'lat', 'long', 'distance'])
         dists       = Series(dists)
-        radius      = round(dists.mean(),0)
         quantiles   = [round(x) for x in dists.quantile(q=[0, 0.25, 0.5, 0.75, 1])]
+        radius      = round(dists.max(),0)
         
         self.setRadius(radius)
         self.setCoM(com)
