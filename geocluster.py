@@ -17,7 +17,7 @@ from numpy import ndarray, stack, vectorize
 # Geo Clusters Class
 ##############################################################################################################################
 class geoClusters():
-    def __init__(self, key, points = None, geoCnts = None, distMax = 150, mergeFactor = 2.0, debug=False):
+    def __init__(self, key, points = None, geoCnts = None, distMax = 150, matchMax = 1000, mergeFactor = 2.0, debug=False):
         self.device = key
         self.points = None
         self.bitlen = None
@@ -40,6 +40,7 @@ class geoClusters():
         
         self.clusterPrefix = "cl"
         self.distMax       = distMax
+        self.matchMax      = matchMax
         
         self.summary = {}
 
@@ -227,6 +228,19 @@ class geoClusters():
             
         
     #########################################################################################################
+    # Rank Clusters
+    #########################################################################################################
+    def getClusterRanking(self, debug=False, returnSeries=True):
+        nms = self.getClusters().keys()
+        cls = [x.getCounts() for x in self.getClusters().values()]
+        weights = Series(cls, index=nms).sort_values(ascending=False)
+        if returnSeries:
+            return weights
+        else:
+            return list(weights.index)
+
+        
+    #########################################################################################################
     # Collect Cluster Center of Masses
     #########################################################################################################
     def getClusterCoMs(self, debug=False):
@@ -315,6 +329,13 @@ class geoClusters():
         if debug:
             elapsed(start, cmt)
         
+    def setExternalCells(self, cells, debug=False):
+        cells.sort_values(ascending=False, inplace=True)
+        self.setCells(cells, debug=debug)
+        
+        if debug:
+            elapsed(start, cmt)
+        
     
     
     #########################################################################################################################################################
@@ -334,7 +355,9 @@ class geoClusters():
         nProtos = -1
         while len(protos) != nProtos:
 
-            ## Take top cell as seed            
+            ## Take top cell as seed
+            if cells.size == 0:
+                break
             seed    = cells.index[0]
             cnt     = cells[seed]
             if cnt < seedMin:
@@ -419,6 +442,8 @@ class geoClusters():
         while len(seedless) != nSeedless:
 
             ## Take top cell as seed
+            if cells.size == 0:
+                break
             geo = cells.index[0]
             cnt = cells[geo]
             if cnt < seedMin:
@@ -744,7 +769,9 @@ class geoClusters():
                     print("There was an error with the cluster finding in KDTree for {0}".format(pt))
                 return None, -1, -1, (lat, long)
                 
-            if distance < self.distMax:
+            #print(distance, self.matchMax)
+                
+            if distance < self.matchMax:
                 if debug:
                     print("  Found nearest cluster {0} with distance {1}".format(index, round(distance,1)))
                 clusterName = self.getClusterNameByIndex(index, debug)
@@ -755,7 +782,7 @@ class geoClusters():
                 return clusterName, index, round(1000*distance,1), Acl[index]
             else:
                 if debug:
-                    print("  Nearest cluster {0} is too far away: distance {1} > {2}".format(index, round(distance,1), self.distMax))
+                    print("  Nearest cluster {0} is too far away: distance {1} > {2}".format(index, round(distance,1), self.matchMax))
                 return None, -1, -1, (lat, long)
         else:
             if debug is True:
